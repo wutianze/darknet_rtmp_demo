@@ -8,7 +8,16 @@ import darknet
 import argparse
 from threading import Thread, enumerate
 from queue import Queue
+import pynng
+import signal
+import struct
+import time
+import numpy
 
+def exit_process(signum, frame):
+    global keep_alive
+    keep_alive = False
+    print("exit process")
 
 def parser():
     parser = argparse.ArgumentParser(description="YOLO Object Detection")
@@ -109,7 +118,8 @@ def convert4cropping(image, bbox):
 
 
 def video_capture(frame_queue, darknet_image_queue):
-    while cap.isOpened():
+    cap = cv2.VideoCapture(args.input)
+    while cap.isOpened() and keep_alive:
         ret, frame = cap.read()
         if not ret:
             break
@@ -122,9 +132,36 @@ def video_capture(frame_queue, darknet_image_queue):
         darknet_image_queue.put(img_for_detect)
     cap.release()
 
+def get_image(frame_queue,darknet_image_queue,input_address):
+    global frame_width
+    global frame_height
+    with pynng.Pair0() as sock:
+        sock.listen(input_address)
+        while keep_alive:
+            msg = sock.recv()
+            header = msg[0:12]
+            hh,ww,cc = struct.unpack('iii',header)
+            if frame_width == 0:
+                frame_width = ww
+                frame_height = hh
+                print('frame_width:'+str(frame_width))
+                print('frame_height:'+str(frame_height))
+            hh,ww,cc,ss = struct.unpack('iii'+str(hh*ww*cc)+'s',msg)
+            frame_get = numpy.frombuffer(ss,dtype=numpy.uint8)
+            frame = frame_get.reshape(hh,ww,cc)
+
+            frame_queue.put(frame)
+            
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_resized = cv2.resize(frame_rgb, (darknet_width, darknet_height),
+                                   interpolation=cv2.INTER_LINEAR)
+            img_for_detect = darknet.make_image(darknet_width, darknet_height, 3)
+            darknet.copy_image_from_bytes(img_for_detect, frame_resized.tobytes())
+            darknet_image_queue.put(img_for_detect)
 
 def inference(darknet_image_queue, detections_queue, fps_queue):
-    while cap.isOpened():
+    #while cap.isOpened():
+    while keep_alive:
         darknet_image = darknet_image_queue.get()
         prev_time = time.time()
         detections = darknet.detect_image(network, class_names, darknet_image, thresh=args.thresh)
@@ -134,20 +171,26 @@ def inference(darknet_image_queue, detections_queue, fps_queue):
         #print("FPS: {}".format(fps))
         #darknet.print_detections(detections, args.ext_output)
         darknet.free_image(darknet_image)
-    cap.release()
+    #cap.release()
 
 def rtmp_out(frame_queue, detections_queue, fps_queue):
+    global frame_width
+    global frame_height
+    while frame_width == 0:
+        print("rtmp_out check frame_width:"+str(frame_width))
+        time.sleep(1)
+    print("new frame_width:"+str(frame_width))
+    print("new frame_height:"+str(frame_height))
     # ffmpeg command
-    print(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    print(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     command = ['ffmpeg',
         '-y',
         '-f', 'rawvideo',
         '-vcodec','rawvideo',
         '-pix_fmt', 'bgr24',
         #'-s', "{}x{}".format(darknet_width, darknet_height),
-        '-s', "{}x{}".format(int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))),
-        '-r', "60",
+        #'-s', "{}x{}".format(int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))),
+        '-s', "{}x{}".format(frame_width, frame_height),
+        '-r', "8",
         '-i', '-',
         '-c:v', 'libx264',
         '-pix_fmt', 'yuv420p',
@@ -158,24 +201,27 @@ def rtmp_out(frame_queue, detections_queue, fps_queue):
     publisher = sp.Popen(command, stdin=sp.PIPE)
 
     random.seed(3)  # deterministic bbox colors
-    while cap.isOpened():
+    #while cap.isOpened():
+    while keep_alive:
         frame = frame_queue.get()
         detections = detections_queue.get()
         fps = fps_queue.get()
         detections_adjusted = []
+        print("get frame")
         if frame is not None:
             for label, confidence, bbox in detections:
                 bbox_adjusted = convert2original(frame, bbox)
                 detections_adjusted.append((str(label), confidence, bbox_adjusted))
             image = darknet.draw_boxes(detections_adjusted, frame, class_colors)
             cv2.putText(image,"FPS:"+str(fps),(100,80),cv2.FONT_HERSHEY_COMPLEX,2.0,(100,200,200),5)
+            print("putText")
             publisher.stdin.write(image.tostring())
-    cap.release()
+    #cap.release()
 
 def drawing(frame_queue, detections_queue, fps_queue):
     random.seed(3)  # deterministic bbox colors
     video = set_saved_video(cap, args.out_filename, (darknet_width, darknet_height))
-    while cap.isOpened():
+    while keep_alive:
         frame = frame_queue.get()
         detections = detections_queue.get()
         fps = fps_queue.get()
@@ -192,12 +238,15 @@ def drawing(frame_queue, detections_queue, fps_queue):
                 video.write(image)
             if cv2.waitKey(fps) == 27:
                 break
-    cap.release()
+    #cap.release()
     video.release()
     cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
+    keep_alive = True
+    signal.signal(signal.SIGINT, exit_process)
+
     frame_queue = Queue()
     darknet_image_queue = Queue(maxsize=1)
     detections_queue = Queue(maxsize=1)
@@ -214,11 +263,13 @@ if __name__ == '__main__':
     darknet_width = darknet.network_width(network)
     darknet_height = darknet.network_height(network)
     # input_path = str2int(args.input)
-    cap = cv2.VideoCapture(args.input)
+    #cap = cv2.VideoCapture(args.input)
     # Get video information
+    frame_width = 0
+    frame_height = 0
     
-    
-    Thread(target=video_capture, args=(frame_queue, darknet_image_queue)).start()
+    Thread(target=get_image, args=(frame_queue, darknet_image_queue,args.input)).start()
+    #Thread(target=video_capture, args=(frame_queue, darknet_image_queue,args.input)).start()
     Thread(target=inference, args=(darknet_image_queue, detections_queue, fps_queue)).start()
     #Thread(target=drawing, args=(frame_queue, detections_queue, fps_queue)).start()
     Thread(target=rtmp_out, args=(frame_queue, detections_queue, fps_queue)).start()

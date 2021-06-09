@@ -1,0 +1,11 @@
+import librtmp
+conn = librtmp.RTMP("rtmp://58.200.131.2:1935/livetv/cctv1",live=True)
+conn.connect()
+#stream=conn.create_stream()
+#data = stream.read(1024)
+#print(data)
+packet = conn.read_packet()
+print(packet.timestamp)
+print(packet.type)
+print(packet.channel)
+print(packet.body)
