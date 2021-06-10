@@ -139,14 +139,15 @@ def get_image(frame_queue,darknet_image_queue,input_address):
         sock.listen(input_address)
         while keep_alive:
             msg = sock.recv()
+            recv_time = time.time()
             header = msg[0:12]
-            hh,ww,cc = struct.unpack('iii',header)
+            hh,ww,cc,tt = struct.unpack('iiif',header)
+            transfer_latency = int((recv_time - tt)*1000)
+            print('transfer latency: %d ms')
             if frame_width == 0:
                 frame_width = ww
                 frame_height = hh
-                print('frame_width:'+str(frame_width))
-                print('frame_height:'+str(frame_height))
-            hh,ww,cc,ss = struct.unpack('iii'+str(hh*ww*cc)+'s',msg)
+            hh,ww,cc,tt,ss = struct.unpack('iiif'+str(hh*ww*cc)+'s',msg)
             frame_get = numpy.frombuffer(ss,dtype=numpy.uint8)
             frame = frame_get.reshape(hh,ww,cc)
 
@@ -207,14 +208,12 @@ def rtmp_out(frame_queue, detections_queue, fps_queue):
         detections = detections_queue.get()
         fps = fps_queue.get()
         detections_adjusted = []
-        print("get frame")
         if frame is not None:
             for label, confidence, bbox in detections:
                 bbox_adjusted = convert2original(frame, bbox)
                 detections_adjusted.append((str(label), confidence, bbox_adjusted))
             image = darknet.draw_boxes(detections_adjusted, frame, class_colors)
             cv2.putText(image,"FPS:"+str(fps),(100,80),cv2.FONT_HERSHEY_COMPLEX,2.0,(100,200,200),5)
-            print("putText")
             publisher.stdin.write(image.tostring())
     #cap.release()
 
