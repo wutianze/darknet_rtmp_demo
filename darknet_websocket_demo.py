@@ -19,20 +19,10 @@ from fastapi import WebSocket
 from fastapi.templating import Jinja2Templates
 from PIL import Image
 import socket
+import json
 
+with_socket = True
 keep_alive = True
-
-gt_s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-gt_s.connect(("",8000))
-def sock_send(msg):
-    bytes_to_send = msg.encode("utf-8")
-    gt_s.send(int.to_bytes(len(bytes_to_send),'big'))
-    gt_s.send(bytes_to_send)
-
-def sock_recv(msg):
-    while keep_alive:
-        msg_size = int.from_bytes(gt_s.recv(4),'little'a)
-        json_msg = (gt_s.recv(msg_size)).decode("utf-8")
 
 
 frame_width =0
@@ -47,6 +37,22 @@ detections_queue = Queue(maxsize=1)
 
 send_timestamp_queue = Queue(maxsize=1)
 recv_timestamp_queue = Queue(maxsize=1)
+transfer_latency_queue = Queue(maxsize=1)
+
+gt_s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+if with_socket:
+    gt_s.connect(("",8000))
+def sock_send(msg):
+    bytes_to_send = msg.encode("utf-8")
+    gt_s.send(int.to_bytes(len(bytes_to_send),'big'))
+    gt_s.send(bytes_to_send)
+
+def sock_recv(msg):
+    while keep_alive:
+        msg_size = int.from_bytes(gt_s.recv(4),'little'a)
+        json_msg = (gt_s.recv(msg_size)).decode("utf-8")
+        dict_recv = json.loads(json_msg)
+
 
 def convert2relative(bbox):
     """
@@ -92,19 +98,28 @@ def convert4cropping(image, bbox):
 
     return bbox_cropping
 
-def get_image(frame_queue,darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,input_address):
+def send_to_gt():
+    while keep_alive:
+        transfer_latency = transfer_latency_queue.get()
+        gt_dict = {'transfer_latency':transfer_latency}
+        sock_send(json.dumps(gt_dict))
+        print("send_one")
+
+def get_image(frame_queue,darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,transfer_latency_queue,input_address):
     global frame_width
     global frame_height
+    global with_socket
     with pynng.Pair0() as sock:
         sock.listen(input_address)
         while keep_alive:
             msg = sock.recv()
             recv_time = time.time()
-            recv_timestamp_queue.put(recv_time)
+            recv_timestamp_queue.put(int(recv_time*1000.0))
             header = msg[0:24]
             hh,ww,cc,tt = struct.unpack('iiid',header)
-            send_timestamp_queue.put(tt)
-            transfer_latency =int((recv_time - tt)*1000.0)
+            send_timestamp_queue.put(int(tt*1000.0))
+            if with_socket:
+                transfer_latency_queue.put(int((recv_time - tt)*1000.0))
             if frame_width == 0:
                 frame_width = ww
                 frame_height = hh
@@ -163,7 +178,7 @@ async def stream_handler(websocket: WebSocket):
             img_byte_arr = io.BytesIO()
             img.save(img_byte_arr, format='PNG')
             img_byte_arr.seek(0)
-            send1_time = time.time()
+            send1_time = int(time.time()*1000.0)
             payload = {"img": "data:image/png;base64,%s"%base64.b64encode(img_byte_arr.read()).decode(),"send0_time":send0_time,"recv_time":recv_time,"send1_time":send1_time}
             await websocket.send_json(payload)
    
@@ -174,6 +189,7 @@ def yolo_run():
     global class_colors
     global darknet_width
     global darknet_height
+    global with_socket
     network, class_names, class_colors = darknet.load_network(
             "./cfg/yolov4.cfg",
             "./cfg/coco.data",
@@ -184,5 +200,7 @@ def yolo_run():
     darknet_width = darknet.network_width(network)
     darknet_height = darknet.network_height(network)
 
-    Thread(target=get_image, args=(frame_queue, darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,"tcp://0.0.0.0:13131")).start()
+    Thread(target=get_image, args=(frame_queue, darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,transfer_latency_queue,"tcp://0.0.0.0:13131")).start()
     Thread(target=inference, args=(darknet_image_queue, detections_queue)).start()
+    if with_socket:
+        Thread(target=send_to_gt).start()
