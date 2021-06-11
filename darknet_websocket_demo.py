@@ -18,6 +18,22 @@ from fastapi import Request
 from fastapi import WebSocket
 from fastapi.templating import Jinja2Templates
 from PIL import Image
+import socket
+
+keep_alive = True
+
+gt_s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+gt_s.connect(("",8000))
+def sock_send(msg):
+    bytes_to_send = msg.encode("utf-8")
+    gt_s.send(int.to_bytes(len(bytes_to_send),'big'))
+    gt_s.send(bytes_to_send)
+
+def sock_recv(msg):
+    while keep_alive:
+        msg_size = int.from_bytes(gt_s.recv(4),'little'a)
+        json_msg = (gt_s.recv(msg_size)).decode("utf-8")
+
 
 frame_width =0
 frame_height=0
@@ -25,12 +41,12 @@ darknet_width=0
 darknet_height=0
 network, class_names, class_colors=None,None,None
 
-keep_alive = True
-frame_queue = Queue(maxsize=5)
-darknet_image_queue = Queue(maxsize=5)
-detections_queue = Queue(maxsize=5)
-process_fps_queue = Queue(maxsize=10)
-transfer_time_queue = Queue(maxsize=10)
+frame_queue = Queue(maxsize=1)
+darknet_image_queue = Queue(maxsize=1)
+detections_queue = Queue(maxsize=1)
+
+send_timestamp_queue = Queue(maxsize=1)
+recv_timestamp_queue = Queue(maxsize=1)
 
 def convert2relative(bbox):
     """
@@ -76,7 +92,7 @@ def convert4cropping(image, bbox):
 
     return bbox_cropping
 
-def get_image(frame_queue,darknet_image_queue,transfer_time_queue,input_address):
+def get_image(frame_queue,darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,input_address):
     global frame_width
     global frame_height
     with pynng.Pair0() as sock:
@@ -84,10 +100,11 @@ def get_image(frame_queue,darknet_image_queue,transfer_time_queue,input_address)
         while keep_alive:
             msg = sock.recv()
             recv_time = time.time()
+            recv_timestamp_queue.put(recv_time)
             header = msg[0:24]
             hh,ww,cc,tt = struct.unpack('iiid',header)
+            send_timestamp_queue.put(tt)
             transfer_latency =int((recv_time - tt)*1000.0)
-            transfer_time_queue.put(transfer_latency)
             if frame_width == 0:
                 frame_width = ww
                 frame_height = hh
@@ -104,15 +121,15 @@ def get_image(frame_queue,darknet_image_queue,transfer_time_queue,input_address)
             darknet.copy_image_from_bytes(img_for_detect, frame_resized.tobytes())
             darknet_image_queue.put(img_for_detect)
 
-def inference(darknet_image_queue, detections_queue, process_fps_queue):
+def inference(darknet_image_queue, detections_queue):
     #while cap.isOpened():
     while keep_alive:
         darknet_image = darknet_image_queue.get()
         prev_time = time.time()
         detections = darknet.detect_image(network, class_names, darknet_image, thresh=0.2)
         detections_queue.put(detections)
-        fps = int(1/(time.time() - prev_time))
-        process_fps_queue.put(fps)
+        #fps = int(1/(time.time() - prev_time))
+        #process_fps_queue.put(fps)
         #print("inference FPS: {}".format(fps))
         darknet.free_image(darknet_image)
     #cap.release()
@@ -131,8 +148,9 @@ async def stream_handler(websocket: WebSocket):
     while keep_alive:
         frame = frame_queue.get()
         detections = detections_queue.get()
-        fps = process_fps_queue.get()
-        transfer_latency = transfer_time_queue.get()
+        #fps = process_fps_queue.get()
+        send0_time = send_timestamp_queue.get()
+        recv_time = recv_timestamp_queue.get()
         detections_adjusted = []
         if frame is not None:
             for label, confidence, bbox in detections:
@@ -145,7 +163,8 @@ async def stream_handler(websocket: WebSocket):
             img_byte_arr = io.BytesIO()
             img.save(img_byte_arr, format='PNG')
             img_byte_arr.seek(0)
-            payload = {"img": "data:image/png;base64,%s"%base64.b64encode(img_byte_arr.read()).decode(),"process_fps":fps,"transfer_latency":transfer_latency}
+            send1_time = time.time()
+            payload = {"img": "data:image/png;base64,%s"%base64.b64encode(img_byte_arr.read()).decode(),"send0_time":send0_time,"recv_time":recv_time,"send1_time":send1_time}
             await websocket.send_json(payload)
    
 
@@ -165,5 +184,5 @@ def yolo_run():
     darknet_width = darknet.network_width(network)
     darknet_height = darknet.network_height(network)
 
-    Thread(target=get_image, args=(frame_queue, darknet_image_queue,transfer_time_queue,"tcp://0.0.0.0:13131")).start()
-    Thread(target=inference, args=(darknet_image_queue, detections_queue, process_fps_queue)).start()
+    Thread(target=get_image, args=(frame_queue, darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,"tcp://0.0.0.0:13131")).start()
+    Thread(target=inference, args=(darknet_image_queue, detections_queue)).start()
