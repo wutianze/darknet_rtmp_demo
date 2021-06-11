@@ -41,16 +41,17 @@ transfer_latency_queue = Queue(maxsize=1)
 
 gt_s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 if with_socket:
-    gt_s.connect(("",8000))
+    gt_s.connect(("172.17.0.2",8000))
 def sock_send(msg):
     bytes_to_send = msg.encode("utf-8")
-    gt_s.send(int.to_bytes(len(bytes_to_send),'big'))
+    gt_s.send((len(bytes_to_send)).to_bytes(4,'little'))
     gt_s.send(bytes_to_send)
 
 def sock_recv(msg):
     while keep_alive:
-        msg_size = int.from_bytes(gt_s.recv(4),'little'a)
+        msg_size = int.from_bytes(gt_s.recv(4),'little')
         json_msg = (gt_s.recv(msg_size)).decode("utf-8")
+        print("msg received:"+json_msg)
         dict_recv = json.loads(json_msg)
 
 
