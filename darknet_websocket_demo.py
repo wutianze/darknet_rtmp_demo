@@ -41,7 +41,7 @@ transfer_latency_queue = Queue(maxsize=1)
 
 gt_s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
 if with_socket:
-    gt_s.connect(("172.17.0.2",8000))
+    gt_s.connect(("10.118.0.41",8000))
 def sock_send(msg):
     bytes_to_send = msg.encode("utf-8")
     gt_s.send((len(bytes_to_send)).to_bytes(4,'little'))
@@ -53,6 +53,8 @@ def sock_recv(msg):
         json_msg = (gt_s.recv(msg_size)).decode("utf-8")
         print("msg received:"+json_msg)
         dict_recv = json.loads(json_msg)
+        if dict_recv['command'] == 1:
+            print("need protect")
 
 
 def convert2relative(bbox):
@@ -102,9 +104,8 @@ def convert4cropping(image, bbox):
 def send_to_gt():
     while keep_alive:
         transfer_latency = transfer_latency_queue.get()
-        gt_dict = {'transfer_latency':transfer_latency}
+        gt_dict = {'transferLatency':transfer_latency}
         sock_send(json.dumps(gt_dict))
-        print("send_one")
 
 def get_image(frame_queue,darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,transfer_latency_queue,input_address):
     global frame_width
