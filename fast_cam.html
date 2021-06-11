@@ -1,0 +1,37 @@
+<html>
+     <head>
+         <title>Real time streaming</title>
+         <script src="https://d3js.org/d3-array.v2.min.js"></script>
+         <script src="https://d3js.org/d3-color.v1.min.js"></script>
+         <script src="https://d3js.org/d3-format.v1.min.js"></script>
+         <script src="https://d3js.org/d3-interpolate.v1.min.js"></script>
+         <script src="https://d3js.org/d3-time.v1.min.js"></script>
+         <script src="https://d3js.org/d3-time-format.v2.min.js"></script>
+         <script src="https://d3js.org/d3-scale.v3.min.js"></script>
+         <script src="https://d3js.org/d3-selection.v1.min.js"></script>
+         <script src="https://d3js.org/d3-axis.v1.min.js"></script>
+         <script src="https://huww98.github.io/TimeChart/dist/timechart.min.js"></script>
+         <style>
+             #chart { width: 100%; height: 300px; margin-top: 300px; }
+         </style>
+     </head>
+     <body>
+	 <canvas id="c" width="320" height="240"></canvas>
+	 <img id="img" src="" />
+         <script>
+             const ws = new WebSocket("ws://10.118.0.35:1935/ws");     
+             var canvas = document.getElementById("c");
+             var ctx = canvas.getContext("2d");
+             var image = document.getElementById("img");
+             image.onload = function() {
+	         ctx.drawImage(image, 0, 0);
+             };
+
+             ws.onmessage = function(event) {
+                 const info = JSON.parse(event.data);
+                 //console.log(info);
+		 image.src=info.img;
+             };
+         </script>
+     </body>
+ </html>
