@@ -20,6 +20,7 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image
 import socket
 import json
+import requests
 
 with_socket = True
 keep_alive = True
@@ -47,14 +48,15 @@ def sock_send(msg):
     gt_s.send((len(bytes_to_send)).to_bytes(4,'little'))
     gt_s.send(bytes_to_send)
 
-def sock_recv(msg):
+def sock_recv():
     while keep_alive:
         msg_size = int.from_bytes(gt_s.recv(4),'little')
         json_msg = (gt_s.recv(msg_size)).decode("utf-8")
-        print("msg received:"+json_msg)
         dict_recv = json.loads(json_msg)
-        if dict_recv['command'] == 1:
-            print("need protect")
+        if dict_recv['command']['transfer_protect'] == 1:
+            r = requests.get(url='http://10.118.0.35:9001/network/test/cde62da0e92a',params={'rate':10,'burst':10})
+            print("status_code:",r.status_code)
+
 
 
 def convert2relative(bbox):
@@ -104,7 +106,7 @@ def convert4cropping(image, bbox):
 def send_to_gt():
     while keep_alive:
         transfer_latency = transfer_latency_queue.get()
-        gt_dict = {'transferLatency':transfer_latency}
+        gt_dict = {'id':'idserver','log':{'transferLatency':transfer_latency}}
         sock_send(json.dumps(gt_dict))
 
 def get_image(frame_queue,darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,transfer_latency_queue,input_address):
@@ -153,10 +155,11 @@ def inference(darknet_image_queue, detections_queue):
 
 app = FastAPI()
 templates = Jinja2Templates(directory=".")
-@app.get("/")
+@app.get("/start")
 def read_root(request: Request):
     yolo_run()
-    return templates.TemplateResponse("fast_cam.html", {"request": request})
+    return {"status":"success"}
+    #return templates.TemplateResponse("fast_cam.html", {"request": request})
 
 @app.websocket("/ws")
 async def stream_handler(websocket: WebSocket):
@@ -206,3 +209,4 @@ def yolo_run():
     Thread(target=inference, args=(darknet_image_queue, detections_queue)).start()
     if with_socket:
         Thread(target=send_to_gt).start()
+        Thread(target=sock_recv).start()
