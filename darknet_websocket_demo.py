@@ -22,7 +22,7 @@ import socket
 import json
 import requests
 
-with_socket = True
+with_socket = False
 keep_alive = True
 
 
@@ -106,7 +106,7 @@ def convert4cropping(image, bbox):
 def send_to_gt():
     while keep_alive:
         transfer_latency = transfer_latency_queue.get()
-        gt_dict = {'id':'idserver','log':{'transferLatency':transfer_latency}}
+        gt_dict = {'id':'idserver','@timestamp':int(time.time()*1000.0),'log':{'transferLatency':transfer_latency}}
         sock_send(json.dumps(gt_dict))
 
 def get_image(frame_queue,darknet_image_queue,send_timestamp_queue,recv_timestamp_queue,transfer_latency_queue,input_address):
@@ -118,6 +118,7 @@ def get_image(frame_queue,darknet_image_queue,send_timestamp_queue,recv_timestam
         while keep_alive:
             msg = sock.recv()
             recv_time = time.time()
+            #print("get one image")
             recv_timestamp_queue.put(int(recv_time*1000.0))
             header = msg[0:24]
             hh,ww,cc,tt = struct.unpack('iiid',header)
@@ -179,7 +180,7 @@ async def stream_handler(websocket: WebSocket):
             image = darknet.draw_boxes(detections_adjusted, frame, class_colors)
             #cv2.putText(image,"FPS:"+str(fps),(100,80),cv2.FONT_HERSHEY_COMPLEX,2.0,(100,200,200),5)
 
-            img = Image.fromarray(image).resize((400,300))
+            img = Image.fromarray(image).resize((960,480))
             img_byte_arr = io.BytesIO()
             img.save(img_byte_arr, format='PNG')
             img_byte_arr.seek(0)
